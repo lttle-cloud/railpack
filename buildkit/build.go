@@ -92,7 +92,14 @@ func BuildWithBuildkitClient(appDir string, plan *plan.BuildPlan, opts BuildWith
 		return fmt.Errorf("failed to parse platform '%s': %w", opts.Platform, err)
 	}
 
-	llbState, image, err := ConvertPlanToLLB(plan, ConvertPlanOptions{
+	localState := llb.Local("context",
+		llb.SharedKeyHint("local"),
+		llb.SessionID(""),
+		llb.WithCustomName("loading ."),
+		llb.FollowPaths([]string{"."}),
+	)
+
+	llbState, image, err := ConvertPlanToLLB(&localState, plan, ConvertPlanOptions{
 		BuildPlatform: buildPlatform,
 		SecretsHash:   opts.SecretsHash,
 		CacheKey:      opts.CacheKey,
