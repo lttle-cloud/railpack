@@ -1,8 +1,8 @@
 package plan
 
 const (
-	RailpackBuilderImage = "ghcr.io/railwayapp/railpack-builder:latest"
-	RailpackRuntimeImage = "ghcr.io/railwayapp/railpack-runtime:latest"
+	RailpackBuilderImage = "europe-docker.pkg.dev/azin-dev/builder/railpack-builder:latest"
+	RailpackRuntimeImage = "europe-docker.pkg.dev/azin-dev/builder/railpack-runtime:latest"
 )
 
 type BuildPlan struct {
