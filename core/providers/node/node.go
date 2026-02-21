@@ -7,9 +7,11 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/log"
 	"github.com/railwayapp/railpack/core/app"
 	"github.com/railwayapp/railpack/core/generate"
 	"github.com/railwayapp/railpack/core/plan"
+	"github.com/railwayapp/railpack/core/resolver"
 )
 
 type PackageManager string
@@ -18,7 +20,9 @@ const (
 	DEFAULT_NODE_VERSION = "22"
 	DEFAULT_BUN_VERSION  = "latest"
 
-	COREPACK_HOME      = "/opt/corepack"
+	COREPACK_HOME = "/opt/corepack"
+
+	// not used by npm, but many other tools: next, jest, webpack, etc
 	NODE_MODULES_CACHE = "/app/node_modules/.cache"
 )
 
@@ -56,7 +60,7 @@ func (p *NodeProvider) Initialize(ctx *generate.GenerateContext) error {
 }
 
 func (p *NodeProvider) Detect(ctx *generate.GenerateContext) (bool, error) {
-	return ctx.App.HasMatch("package.json"), nil
+	return ctx.App.HasFile("package.json"), nil
 }
 
 func (p *NodeProvider) Plan(ctx *generate.GenerateContext) error {
@@ -77,12 +81,10 @@ func (p *NodeProvider) Plan(ctx *generate.GenerateContext) error {
 	miseStep := ctx.GetMiseStepBuilder()
 	p.InstallMisePackages(ctx, miseStep)
 
-	// Install
 	install := ctx.NewCommandStep("install")
 	install.AddInput(plan.NewStepLayer(miseStep.Name()))
 	p.InstallNodeDeps(ctx, install)
 
-	// Prune
 	prune := ctx.NewCommandStep("prune")
 	prune.AddInput(plan.NewStepLayer(install.Name()))
 	prune.Secrets = []string{}
@@ -90,7 +92,6 @@ func (p *NodeProvider) Plan(ctx *generate.GenerateContext) error {
 		p.PruneNodeDeps(ctx, prune)
 	}
 
-	// Build
 	build := ctx.NewCommandStep("build")
 	build.AddInput(plan.NewStepLayer(install.Name()))
 	p.Build(ctx, build)
@@ -129,6 +130,7 @@ func (p *NodeProvider) Plan(ctx *generate.GenerateContext) error {
 
 	buildLayer := plan.NewStepLayer(build.Name(), plan.Filter{
 		Include: buildIncludeDirs,
+		// TODO we should just have a default dockerignore/exclusion list instead of hardcoding here
 		Exclude: []string{"node_modules", ".yarn"},
 	})
 
@@ -184,9 +186,11 @@ func (p *NodeProvider) Build(ctx *generate.GenerateContext, build *generate.Comm
 		}
 	}
 
-	p.addCaches(ctx, build)
+	p.addCachesToBuildStep(ctx, build)
 }
 
+// adds framework-specific caches for packages that match the given framework check.
+// It creates uniquely named caches for each package's framework subdirectory to optimize build performance.
 func (p *NodeProvider) addFrameworkCaches(ctx *generate.GenerateContext, build *generate.CommandStepBuilder, frameworkName string, frameworkCheck func(*WorkspacePackage, *generate.GenerateContext) bool, cacheSubPath string) {
 	if packages, err := p.getPackagesWithFramework(ctx, frameworkCheck); err == nil {
 		for _, pkg := range packages {
@@ -196,14 +200,17 @@ func (p *NodeProvider) addFrameworkCaches(ctx *generate.GenerateContext, build *
 			} else {
 				cacheName = fmt.Sprintf("%s-%s", frameworkName, strings.ReplaceAll(strings.TrimSuffix(pkg.Path, "/"), "/", "-"))
 			}
+			// in this case, pkg.Path represents the relative path to a workspace package from the root of your repository
 			cacheDir := path.Join("/app", pkg.Path, cacheSubPath)
 			build.AddCache(ctx.Caches.AddCache(cacheName, cacheDir))
 		}
 	}
 }
 
-func (p *NodeProvider) addCaches(ctx *generate.GenerateContext, build *generate.CommandStepBuilder) {
-	build.AddCache(ctx.Caches.AddCache("node-modules", "/app/node_modules/.cache"))
+// cache directories to add to the build step: if lock files are unchanged, these are pulled from cache, but cannot
+// be removed in future steps.
+func (p *NodeProvider) addCachesToBuildStep(ctx *generate.GenerateContext, build *generate.CommandStepBuilder) {
+	build.AddCache(ctx.Caches.AddCache("node-modules", NODE_MODULES_CACHE))
 
 	p.addFrameworkCaches(ctx, build, "next", func(pkg *WorkspacePackage, ctx *generate.GenerateContext) bool {
 		if pkg.PackageJson.HasScript("build") {
@@ -246,6 +253,7 @@ func (p *NodeProvider) InstallNodeDeps(ctx *generate.GenerateContext, install *g
 	install.UseSecretsWithPrefixes([]string{"NODE", "NPM", "BUN", "PNPM", "YARN", "CI"})
 	install.AddPaths([]string{"/app/node_modules/.bin"})
 
+	// TODO once dockerignore is in place, we should remove this
 	if ctx.App.HasMatch("node_modules") {
 		ctx.Logger.LogWarn("node_modules directory found in project root, this is likely a mistake")
 		ctx.Logger.LogWarn("It is recommended to add node_modules to the .gitignore file")
@@ -262,6 +270,7 @@ func (p *NodeProvider) InstallNodeDeps(ctx *generate.GenerateContext, install *g
 			plan.NewCopyCommand("package.json"),
 			// corepack will detect the package manager version from package.json, safe to assume the user is properly
 			// specifying the version they want there, no need to check other version specifications.
+			// corepack *used* to be bundled with node, but as of v25 it's not, so we install it explicitly
 			plan.NewExecShellCommand("npm i -g corepack@latest && corepack enable && corepack prepare --activate"),
 		})
 	}
@@ -272,59 +281,64 @@ func (p *NodeProvider) InstallNodeDeps(ctx *generate.GenerateContext, install *g
 		plan.NewExecCommand(fmt.Sprintf("mkdir -p %s", NODE_MODULES_CACHE)),
 	})
 
-	p.packageManager.installDependencies(ctx, p.workspace, install)
+	p.packageManager.installDependencies(ctx, p.workspace, install, p.usesCorepack())
+}
+
+// resolve node version selection which is used both for node runtime *and* when bun is used but node is required for
+// build or runtime.
+func (p *NodeProvider) applyNodeVersionResolution(ctx *generate.GenerateContext, miseStep *generate.MiseStepBuilder, nodeToolRef resolver.PackageRef) {
+	if envVersion, varName := ctx.Env.GetConfigVariable("NODE_VERSION"); envVersion != "" {
+		miseStep.Version(nodeToolRef, envVersion, varName)
+	}
+
+	if p.packageJson != nil && p.packageJson.Engines != nil && p.packageJson.Engines["node"] != "" {
+		miseStep.Version(nodeToolRef, p.packageJson.Engines["node"], "package.json > engines > node")
+	}
 }
 
 func (p *NodeProvider) InstallMisePackages(ctx *generate.GenerateContext, miseStep *generate.MiseStepBuilder) {
 	requiresNode := p.requiresNode(ctx)
+	misePackages := []string{}
 
-	// Node
 	if requiresNode {
 		node := miseStep.Default("node", DEFAULT_NODE_VERSION)
+		misePackages = append(misePackages, "node")
 
-		if envVersion, varName := ctx.Env.GetConfigVariable("NODE_VERSION"); envVersion != "" {
-			miseStep.Version(node, envVersion, varName)
-		}
+		// libatomic1 is required for Node.js v25+
+		ctx.Deploy.AddAptPackages([]string{"libatomic1"})
 
-		if p.packageJson != nil && p.packageJson.Engines != nil && p.packageJson.Engines["node"] != "" {
-			miseStep.Version(node, p.packageJson.Engines["node"], "package.json > engines > node")
-		}
-
-		if nvmrc, err := ctx.App.ReadFile(".nvmrc"); err == nil {
-			if len(nvmrc) > 0 && nvmrc[0] == 'v' {
-				nvmrc = nvmrc[1:]
-			}
-
-			miseStep.Version(node, string(nvmrc), ".nvmrc")
-		}
-
-		if nodeVersionFile, err := ctx.App.ReadFile(".node-version"); err == nil {
-			miseStep.Version(node, string(nodeVersionFile), ".node-version")
-		}
+		p.applyNodeVersionResolution(ctx, miseStep, node)
 	}
 
-	// Bun
 	if p.requiresBun(ctx) {
+		// there isn't a bun provider, it's mixed into the node provider
+		// users will see a message that indicates that railpack detected node, but not that bun is selected as the runtime
+		// let's at least add a note the plan so users understand that the bun runtime is being used.
+		ctx.Logger.LogInfo("Bun runtime detected")
+
 		bun := miseStep.Default("bun", DEFAULT_BUN_VERSION)
+		misePackages = append(misePackages, "bun")
 
 		if envVersion, varName := ctx.Env.GetConfigVariable("BUN_VERSION"); envVersion != "" {
 			miseStep.Version(bun, envVersion, varName)
 		}
 
+		// .bun-version is a community convention for specifying the Bun version.
+		// It is not officially supported by Bun itself, but is recognized by version managers like mise.
 		if bunVersionFile, err := ctx.App.ReadFile(".bun-version"); err == nil {
 			miseStep.Version(bun, string(bunVersionFile), ".bun-version")
 		}
 
-		if bunVersionFile, err := ctx.App.ReadFile(".bun-version"); err == nil {
-			miseStep.Version(bun, string(bunVersionFile), ".bun-version")
-		}
-
-		// TODO why don't we install this via mise?
 		// If we don't need node in the final image, we still want to include it for the install steps
 		// since many packages need node-gyp to install native modules
-		// in this case, we don't need a specific version, so we'll just pull from apt
 		if !requiresNode && ctx.Config.Packages["node"] == "" {
-			miseStep.AddSupportingAptPackage("nodejs")
+			node := miseStep.Default("node", DEFAULT_NODE_VERSION)
+			misePackages = append(misePackages, "node")
+
+			p.applyNodeVersionResolution(ctx, miseStep, node)
+
+			// libatomic1 is required for Node.js v25+
+			ctx.Deploy.AddAptPackages([]string{"libatomic1"})
 		}
 	}
 
@@ -332,6 +346,10 @@ func (p *NodeProvider) InstallMisePackages(ctx *generate.GenerateContext, miseSt
 
 	if p.usesCorepack() {
 		miseStep.Variables["MISE_NODE_COREPACK"] = "true"
+	}
+
+	if len(misePackages) > 0 {
+		miseStep.UseMiseVersions(ctx, misePackages)
 	}
 }
 
@@ -359,7 +377,7 @@ func (p *NodeProvider) hasDependency(dependency string) bool {
 	return p.packageJson.hasDependency(dependency)
 }
 
-// if packageManager config exists in package.json, then assume corepack
+// if 'packageManager' field exists in package.json, then assume corepack unless using bun
 func (p *NodeProvider) usesCorepack() bool {
 	return p.packageJson != nil && p.packageJson.PackageManager != nil && p.packageManager != PackageManagerBun
 }
@@ -368,32 +386,45 @@ func (p *NodeProvider) usesPuppeteer() bool {
 	return p.workspace.HasDependency("puppeteer")
 }
 
+// determine the major version of yarn from a version string. These major versions are installed and managed quite
+// differently which is why we need to distinguish them here.
+func parseYarnPackageManager(pmVersion string) PackageManager {
+	if strings.Split(pmVersion, ".")[0] == "1" {
+		return PackageManagerYarn1
+	}
+
+	// versions 2-4 are all considered part of the "Yarn Berry" release line
+	return PackageManagerYarnBerry
+}
+
 func (p *NodeProvider) getPackageManager(app *app.App) PackageManager {
 	// Check packageManager field first
 	if packageJson, err := p.GetPackageJson(app); err == nil && packageJson.PackageManager != nil {
 		pmName, pmVersion := packageJson.GetPackageManagerInfo()
 		if pmName == "yarn" && pmVersion != "" {
-			majorVersion := strings.Split(pmVersion, ".")[0]
-			if majorVersion == "1" {
-				return PackageManagerYarn1
-			} else {
-				return PackageManagerYarnBerry
-			}
+			return parseYarnPackageManager(pmVersion)
 		} else if pmName == "pnpm" {
 			return PackageManagerPnpm
+		} else if pmName == "npm" {
+			return PackageManagerNpm
 		} else if pmName == "bun" {
 			return PackageManagerBun
+		} else if pmName == "" {
+			// this is mostly likely a user configuration bug, so let's at least log it in case someone is stuck
+			log.Info("Package manager name is empty in package.json")
+		} else {
+			log.Warnf("Unknown package manager `%s` specified in package.json, defaulting to npm", pmName)
 		}
 	}
 
 	// Fall back to file-based detection
-	if app.HasMatch("pnpm-lock.yaml") {
+	if app.HasFile("pnpm-lock.yaml") {
 		return PackageManagerPnpm
-	} else if app.HasMatch("bun.lockb") || app.HasMatch("bun.lock") {
+	} else if app.HasFile("bun.lockb") || app.HasFile("bun.lock") {
 		return PackageManagerBun
-	} else if app.HasMatch(".yarnrc.yml") || app.HasMatch(".yarnrc.yaml") {
+	} else if app.HasFile(".yarnrc.yml") || app.HasFile(".yarnrc.yaml") {
 		return PackageManagerYarnBerry
-	} else if app.HasMatch("yarn.lock") {
+	} else if app.HasFile("yarn.lock") {
 		return PackageManagerYarn1
 	}
 
@@ -407,20 +438,18 @@ func (p *NodeProvider) getPackageManager(app *app.App) PackageManager {
 		}
 		if engine := strings.TrimSpace(packageJson.Engines["yarn"]); engine != "" {
 			// Decide yarn major: 1 -> yarn1, otherwise default to berry
-			major := strings.Split(engine, ".")[0]
-			if major == "1" {
-				return PackageManagerYarn1
-			}
-			return PackageManagerYarnBerry
+			return parseYarnPackageManager(engine)
 		}
 	}
+
+	log.Info("No package manager inferred, using npm default")
 
 	return PackageManagerNpm
 }
 
 func (p *NodeProvider) GetPackageJson(app *app.App) (*PackageJson, error) {
 	packageJson := NewPackageJson()
-	if !app.HasMatch("package.json") {
+	if !app.HasFile("package.json") {
 		return packageJson, nil
 	}
 
@@ -487,7 +516,7 @@ func (p *NodeProvider) requiresNode(ctx *generate.GenerateContext) bool {
 	return p.isAstro(ctx) || p.isVite(ctx)
 }
 
-// packageJsonRequiresBun checks if a package.json's scripts use bun commands
+// checks if a package.json's scripts use bun commands
 func packageJsonRequiresBun(packageJson *PackageJson) bool {
 	if packageJson == nil || packageJson.Scripts == nil {
 		return false
@@ -502,7 +531,7 @@ func packageJsonRequiresBun(packageJson *PackageJson) bool {
 	return false
 }
 
-// requiresBun checks if bun should be installed and available for the build and final image
+// checks if bun should be installed and available for the build and final image
 func (p *NodeProvider) requiresBun(ctx *generate.GenerateContext) bool {
 	if p.packageManager == PackageManagerBun {
 		return true

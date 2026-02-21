@@ -16,8 +16,7 @@
      "/mise/installs",
      "/usr/local/bin/mise",
      "/etc/mise/config.toml",
-     "/root/.local/state/mise",
-     ".tool-versions"
+     "/root/.local/state/mise"
     ],
     "step": "packages:mise"
    },
@@ -66,7 +65,7 @@
      "path": "/etc/mise/config.toml"
     },
     {
-     "cmd": "sh -c 'mise trust -a \u0026\u0026 mise install'",
+     "cmd": "mise install",
      "customName": "install mise packages: python, uv"
     }
    ],
@@ -80,10 +79,13 @@
     "MISE_CACHE_DIR": "/mise/cache",
     "MISE_CONFIG_DIR": "/mise",
     "MISE_DATA_DIR": "/mise",
+    "MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS": "python,node,ruby,elixir,go,java,yarn",
     "MISE_INSTALLS_DIR": "/mise/installs",
     "MISE_NODE_VERIFY": "false",
+    "MISE_PARANOID": "1",
     "MISE_PYTHON_COMPILE": "false",
-    "MISE_SHIMS_DIR": "/mise/shims"
+    "MISE_SHIMS_DIR": "/mise/shims",
+    "MISE_TRUSTED_CONFIG_PATHS": "/app"
    }
   },
   {

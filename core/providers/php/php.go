@@ -36,8 +36,8 @@ func (p *PhpProvider) Name() string {
 }
 
 func (p *PhpProvider) Detect(ctx *generate.GenerateContext) (bool, error) {
-	return ctx.App.HasMatch("index.php") ||
-		ctx.App.HasMatch("composer.json"), nil
+	return ctx.App.HasFile("index.php") ||
+		ctx.App.HasFile("composer.json"), nil
 }
 
 func (p *PhpProvider) Initialize(ctx *generate.GenerateContext) error {
@@ -79,6 +79,8 @@ func (p *PhpProvider) Plan(ctx *generate.GenerateContext) error {
 	if isLaravel {
 		ctx.Logger.LogInfo("Found Laravel app")
 	}
+
+	ctx.Metadata.SetBool("phpLaravel", isLaravel)
 
 	if isNode {
 		err = p.DeployWithNode(ctx, nodeProvider, composer, isLaravel)
@@ -207,6 +209,8 @@ func (p *PhpProvider) DeployWithNode(ctx *generate.GenerateContext, nodeProvider
 	if isLaravel {
 		build.AddCommands([]plan.Command{
 			plan.NewExecShellCommand("mkdir -p storage/framework/{sessions,views,cache,testing} storage/logs bootstrap/cache && chmod -R a+rw storage"),
+			// config values like APP_KEY are resolved and baked into bootstrap/cache/config.php. Runtime env vars are ignored
+			// for cached configs, leading to MissingAppKeyException if APP_KEY was unset at cache time.
 			plan.NewExecCommand("php artisan config:cache"),
 			plan.NewExecCommand("php artisan event:cache"),
 			plan.NewExecCommand("php artisan route:cache"),
@@ -346,7 +350,7 @@ func (p *PhpProvider) needsRedisExtension(ctx *generate.GenerateContext, compose
 }
 
 func (p *PhpProvider) usesLaravel(ctx *generate.GenerateContext) bool {
-	return ctx.App.HasMatch("artisan")
+	return ctx.App.HasFile("artisan")
 }
 
 type ConfigFiles struct {
@@ -454,6 +458,8 @@ func (p *PhpProvider) readComposerJson(ctx *generate.GenerateContext) (map[strin
 
 	return composerJson, nil
 }
+
+func (p *PhpProvider) CleansePlan(buildPlan *plan.BuildPlan) {}
 
 func (p *PhpProvider) StartCommandHelp() string {
 	return ""

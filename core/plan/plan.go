@@ -5,6 +5,7 @@ const (
 	RailpackRuntimeImage = "europe-docker.pkg.dev/azin-dev/builder/railpack-runtime:latest"
 )
 
+// serialized to railpack.json
 type BuildPlan struct {
 	Steps   []Step            `json:"steps,omitempty"`
 	Caches  map[string]*Cache `json:"caches,omitempty"`

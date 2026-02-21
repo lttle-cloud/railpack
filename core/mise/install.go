@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	_ "embed"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,12 +17,18 @@ import (
 	"github.com/charmbracelet/log"
 )
 
-const (
-	miseVersion       = "2025.10.13"
-	githubReleaseBase = "https://github.com/jdx/mise/releases/download"
-)
+//go:embed version.txt
+var miseVersionRaw string
 
-// getBinaryName returns the name of the binary based on the operating system
+var miseVersion string
+
+const githubReleaseBase = "https://github.com/jdx/mise/releases/download"
+
+func init() {
+	miseVersion = strings.TrimSpace(miseVersionRaw)
+}
+
+// returns name of the mise binary based on the operating system
 func getBinaryName() string {
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf("mise-%s.exe", miseVersion)
@@ -29,7 +36,7 @@ func getBinaryName() string {
 	return fmt.Sprintf("mise-%s", miseVersion)
 }
 
-// getAssetName returns the name of the asset based on the operating system and architecture
+// returns platform-specific mise github asset download name
 func getAssetName() (string, error) {
 	var platform string
 
@@ -93,7 +100,7 @@ func getBinaryPath(cacheDir string) string {
 	return filepath.Join(cacheDir, getBinaryName())
 }
 
-// ensureInstalled ensures the mise binary is installed and returns its path
+// ensures the mise binary (at the pinned version) is installed and returns its path
 func ensureInstalled(cacheDir string) (string, error) {
 	binaryPath := getBinaryPath(cacheDir)
 
@@ -275,7 +282,7 @@ func validateInstallation(cacheDir string) error {
 	return nil
 }
 
-// createAtomicWriter creates a temporary file and returns a function to atomically write content to the final destination
+// creates a temporary file and returns a function to atomically write content to the final destination
 func createAtomicWriter(targetPath string) (writeAndMove func(write func(tempFile *os.File) error) error, cleanup func(), err error) {
 	tempFile, err := os.CreateTemp(filepath.Dir(targetPath), "mise-temp-*")
 	if err != nil {

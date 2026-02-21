@@ -17,7 +17,9 @@
    "LANG": "en_US.UTF-8",
    "LANGUAGE": "en_US:en",
    "LC_ALL": "en_US.UTF-8",
-   "MIX_ENV": "prod"
+   "MIX_ARCHIVES": "/root/.mix/archives",
+   "MIX_ENV": "prod",
+   "MIX_HOME": "/root/.mix"
   }
  },
  "steps": [
@@ -39,7 +41,7 @@
      "path": "/etc/mise/config.toml"
     },
     {
-     "cmd": "sh -c 'mise trust -a \u0026\u0026 mise install'",
+     "cmd": "mise install",
      "customName": "install mise packages: elixir, erlang"
     }
    ],
@@ -53,13 +55,19 @@
     "MISE_CACHE_DIR": "/mise/cache",
     "MISE_CONFIG_DIR": "/mise",
     "MISE_DATA_DIR": "/mise",
+    "MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS": "python,node,ruby,elixir,go,java,yarn",
     "MISE_INSTALLS_DIR": "/mise/installs",
     "MISE_NODE_VERIFY": "false",
-    "MISE_SHIMS_DIR": "/mise/shims"
+    "MISE_PARANOID": "1",
+    "MISE_SHIMS_DIR": "/mise/shims",
+    "MISE_TRUSTED_CONFIG_PATHS": "/app"
    }
   },
   {
    "commands": [
+    {
+     "cmd": "mkdir -p config deps _build"
+    },
     {
      "cmd": "mix local.hex --force"
     },
@@ -76,9 +84,6 @@
     },
     {
      "cmd": "mix deps.get --only prod"
-    },
-    {
-     "cmd": "mkdir -p config"
     },
     {
      "dest": "config/",
@@ -106,7 +111,9 @@
     "LANG": "en_US.UTF-8",
     "LANGUAGE": "en_US:en",
     "LC_ALL": "en_US.UTF-8",
-    "MIX_ENV": "prod"
+    "MIX_ARCHIVES": "/root/.mix/archives",
+    "MIX_ENV": "prod",
+    "MIX_HOME": "/root/.mix"
    }
   },
   {
@@ -166,7 +173,9 @@
     "LANG": "en_US.UTF-8",
     "LANGUAGE": "en_US:en",
     "LC_ALL": "en_US.UTF-8",
-    "MIX_ENV": "prod"
+    "MIX_ARCHIVES": "/root/.mix/archives",
+    "MIX_ENV": "prod",
+    "MIX_HOME": "/root/.mix"
    }
   }
  ]

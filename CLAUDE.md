@@ -25,6 +25,17 @@ with support for Node, Python, Go, PHP, and more.
 - Seriously, do not write comments that are obvious from the code itself.
 - Do not write one-line functions
 - Always use the App abstraction for file system operations.
+- When configuring Mise settings, prefer environment variables (e.g.
+  `MISE_PIPX_UVX`) over TOML settings to maintain consistency with existing
+  patterns in the codebase.
+- **Never manually update lockfiles** (yarn.lock, package-lock.json,
+  pnpm-lock.yaml, etc.). Always use the respective package manager to generate
+  or update lockfiles. Manual edits can result in invalid checksums and broken
+  builds.
+
+# Mise Setup
+
+If mise is not available in your environment, install it using the instructions at https://mise.jdx.dev/installing-mise.html.
 
 # Workflow
 
@@ -39,17 +50,23 @@ with support for Node, Python, Go, PHP, and more.
 - Do not run any write operations with `git`
 - Do not use `bin/railpack` instead use `mise run cli` (which is the development build of `railpack`)
   - Therefore do not run `mise build`, we don't need a `railpack` binary for local testing
+- Use a local `tmp/` directory for temporary files instead of the global `/tmp/`
+  directory. Don't worry about cleaning up tmp directories.
+- You can clone the mise repo (https://github.com/jdx/mise) into `tmp/` to
+  inspect it when needed.
 
 # Tests
 
 There are normal unit tests, snapshot tests, and integration tests. The integration tests are most unique to this project:
 
 * They represent example projects that would be built using the `railpack` CLI
-* On CI, they are build and run to make sure `railpack` properly builds *and* runs the project
+* On CI, they are built and run to make sure `railpack` properly builds *and* runs the project
 * `test.json` and `docker-compose.yml` are used to help determine what assertions should be made and what services should be run for the test
 
 ## Integration Tests
 
+* Run `mise run test-integration-cwd` from within an `examples/` directory to run the integration test for that example.
+* `test.json` files are JSONC format and support comments. Use comments to explain temporary workarounds or special test conditions.
 * In `test.json` we should avoid using `justBuild` for all but the most simple projects. `justBuild` does not test `expectedOutput` or any other assertions.
 * If the project has a server component, we should use a `httpCheck` test. Read the @docs/src/content/docs/guides/developing-locally.md guide, specifically the `### HTTP Checks` section for more information.
 * `httpCheck` assertions assume that `$PORT` is respected.
@@ -59,3 +76,4 @@ There are normal unit tests, snapshot tests, and integration tests. The integrat
 
 - Markdown files in @docs/src/content/docs/ should be limited to 80 columns
 - Do not fix indentation or formatting manually. This is corrected automatically using `mise run check`
+- NEVER commit language-specific cache or build artifacts (e.g. Python `__pycache__/`, `*.pyc`, `*.pyo` files). If you encounter build artifacts that are not excluded by .gitignore, add appropriate patterns to .gitignore to exclude them

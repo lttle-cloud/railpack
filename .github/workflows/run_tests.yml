@@ -15,12 +15,13 @@ on:
     # something changes in the package ecosystem that breaks one of our build tests.
     - cron: "0 0 * * *"
 jobs:
+  # generate a JSON array of all entries in examples/ to shard out example into a separate job that can be run in parallel
   find-examples:
     runs-on: ubuntu-latest
     outputs:
       examples: ${{ steps.find-examples.outputs.examples }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Find examples with test.json
         id: find-examples
@@ -31,25 +32,36 @@ jobs:
   test:
     needs: find-examples
     runs-on: ubuntu-latest
+    # packages:read is not available by default and is required for docker login to ghcr.io
+    permissions:
+      contents: read
+      packages: read
     strategy:
       matrix:
+        # create a separate job for each entry in examples/. i.e. gleam, elixir-ecto, etc
         example: ${{ fromJson(needs.find-examples.outputs.examples) }}
       fail-fast: false
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.23.4"
-          cache: true
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - uses: jdx/mise-action@5ac50f778e26fac95da98d50503682459e86d566
 
       # Set up GitHub Actions runtime for BuildKit cache
       - name: Set up BuildKit GHA cache
         uses: crazy-max/ghaction-github-runtime@v3
 
+      # Not strictly required, but authenticating increases rate limits and reduces 429 errors
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Start BuildKit
+        env:
+          # in rare cases, docker hub can timeout
+          DOCKER_CLIENT_TIMEOUT: 300
         run: |
           docker run --rm --privileged -d \
             --name buildkit \
@@ -72,11 +84,12 @@ jobs:
         env:
           # without the GITHUB_TOKEN, mise will 403 us
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # each test should be run with an exact match otherwise `gleam` will also match `gleam-custom` causing duplicate test runs
         run: |
-          # Add cache import/export flags to the test command
           go test -v ./integration_tests \
-            -run "TestExamplesIntegration/${{ matrix.example }}" \
-            -timeout 10m
+            -run "^TestExamplesIntegration/${{ matrix.example }}$" \
+            -timeout 20m
+        # TODO Add cache import/export flags to the test command
         # -buildkit-cache-import="type=gha,url=${{ env.ACTIONS_CACHE_URL }},token=${{ env.ACTIONS_RUNTIME_TOKEN }},scope=${{ matrix.example }}" \
         # -buildkit-cache-export="type=gha,url=${{ env.ACTIONS_CACHE_URL }},token=${{ env.ACTIONS_RUNTIME_TOKEN }},mode=max,scope=${{ matrix.example }},error=ignore,compression=zstd"
 

@@ -1,5 +1,13 @@
 {
  "caches": {
+  "apt": {
+   "directory": "/var/cache/apt",
+   "type": "locked"
+  },
+  "apt-lists": {
+   "directory": "/var/lib/apt/lists",
+   "type": "locked"
+  },
   "node-modules": {
    "directory": "/app/node_modules/.cache",
    "type": "shared"
@@ -11,7 +19,7 @@
  },
  "deploy": {
   "base": {
-   "image": "ghcr.io/railwayapp/railpack-runtime:latest"
+   "step": "packages:apt:runtime"
   },
   "inputs": [
    {
@@ -66,7 +74,7 @@
      "path": "/etc/mise/config.toml"
     },
     {
-     "cmd": "sh -c 'mise trust -a \u0026\u0026 mise install'",
+     "cmd": "mise install",
      "customName": "install mise packages: node"
     }
    ],
@@ -80,9 +88,12 @@
     "MISE_CACHE_DIR": "/mise/cache",
     "MISE_CONFIG_DIR": "/mise",
     "MISE_DATA_DIR": "/mise",
+    "MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS": "python,node,ruby,elixir,go,java,yarn",
     "MISE_INSTALLS_DIR": "/mise/installs",
     "MISE_NODE_VERIFY": "false",
-    "MISE_SHIMS_DIR": "/mise/shims"
+    "MISE_PARANOID": "1",
+    "MISE_SHIMS_DIR": "/mise/shims",
+    "MISE_TRUSTED_CONFIG_PATHS": "/app"
    }
   },
   {
@@ -97,12 +108,12 @@
      "cmd": "mkdir -p /app/node_modules/.cache"
     },
     {
-     "dest": "package.json",
-     "src": "package.json"
-    },
-    {
      "dest": "package-lock.json",
      "src": "package-lock.json"
+    },
+    {
+     "dest": "package.json",
+     "src": "package.json"
     },
     {
      "dest": "prisma",
@@ -150,6 +161,24 @@
    "secrets": [
     "*"
    ]
+  },
+  {
+   "caches": [
+    "apt",
+    "apt-lists"
+   ],
+   "commands": [
+    {
+     "cmd": "sh -c 'apt-get update \u0026\u0026 apt-get install -y libatomic1'",
+     "customName": "install apt packages: libatomic1"
+    }
+   ],
+   "inputs": [
+    {
+     "image": "ghcr.io/railwayapp/railpack-runtime:latest"
+    }
+   ],
+   "name": "packages:apt:runtime"
   }
  ]
 }

@@ -120,7 +120,6 @@ func BuildWithBuildkitClient(appDir string, plan *plan.BuildPlan, opts BuildWith
 	}
 
 	if opts.DumpLLB {
-		log.Info("Dumping LLB to stdout")
 		err = llb.WriteTo(def, os.Stdout)
 		if err != nil {
 			return fmt.Errorf("error writing LLB definition: %w", err)
@@ -286,7 +285,8 @@ func getImageName(appDir string) string {
 	if name == "" {
 		name = "railpack-app" // Fallback if path ends in separator
 	}
-	return name
+	// Docker requires image names to be lowercase
+	return strings.ToLower(name)
 }
 
 // Helper function to parse key=value strings into a map

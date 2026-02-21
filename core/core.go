@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 
 	"github.com/charmbracelet/log"
 	"github.com/railwayapp/railpack/core/app"
@@ -67,7 +66,6 @@ func readConfigJSON(path string, v interface{}) error {
 func GenerateBuildPlan(app *app.App, env *app.Environment, options *GenerateBuildPlanOptions) *BuildResult {
 	logger := logger.NewLogger()
 
-	// Get the full user config based on file config, env config, and options
 	config, err := GetConfig(app, env, options, logger)
 	if err != nil {
 		logger.LogError("%s", err.Error())
@@ -109,10 +107,16 @@ func GenerateBuildPlan(app *app.App, env *app.Environment, options *GenerateBuil
 		return &BuildResult{Success: false, Logs: logger.Logs}
 	}
 
+	// before `Generate()` any commands provided by railpack.json are *not* merged into the provider-generated
+	// buildPlan. This means providers can't view any of the custom structure provided by the user via a railpack.json
 	buildPlan, resolvedPackages, err := ctx.Generate()
 	if err != nil {
 		logger.LogError("%s", err.Error())
 		return &BuildResult{Success: false, Logs: logger.Logs}
+	}
+
+	if providerToUse != nil {
+		providerToUse.CleansePlan(buildPlan)
 	}
 
 	if !ValidatePlan(buildPlan, app, logger, &ValidatePlanOptions{
@@ -151,7 +155,6 @@ func GetConfig(app *app.App, env *app.Environment, options *GenerateBuildPlanOpt
 	return mergedConfig, nil
 }
 
-// GenerateConfigFromFile generates a config from the config file
 func GenerateConfigFromFile(app *app.App, env *app.Environment, options *GenerateBuildPlanOptions, logger *logger.Logger) (*c.Config, error) {
 	config := c.EmptyConfig()
 
@@ -216,16 +219,16 @@ func GenerateConfigFromEnvironment(env *app.Environment) *c.Config {
 		config.Deploy.StartCmd = startCmdVar
 	}
 
-	if envPackages, _ := env.GetConfigVariable("PACKAGES"); envPackages != "" {
-		config.Packages = utils.ParsePackageWithVersion(strings.Split(envPackages, " "))
+	if packages, _ := env.GetConfigVariableList("PACKAGES"); len(packages) > 0 {
+		config.Packages = utils.ParsePackageWithVersion(packages)
 	}
 
-	if envAptPackages, _ := env.GetConfigVariable("BUILD_APT_PACKAGES"); envAptPackages != "" {
-		config.BuildAptPackages = strings.Split(envAptPackages, " ")
+	if aptPackages, _ := env.GetConfigVariableList("BUILD_APT_PACKAGES"); len(aptPackages) > 0 {
+		config.BuildAptPackages = aptPackages
 	}
 
-	if envAptPackages, _ := env.GetConfigVariable("DEPLOY_APT_PACKAGES"); envAptPackages != "" {
-		config.Deploy.AptPackages = strings.Split(envAptPackages, " ")
+	if aptPackages, _ := env.GetConfigVariableList("DEPLOY_APT_PACKAGES"); len(aptPackages) > 0 {
+		config.Deploy.AptPackages = aptPackages
 	}
 
 	config.Secrets = append(config.Secrets, slices.Sorted(maps.Keys(env.Variables))...)
@@ -233,7 +236,7 @@ func GenerateConfigFromEnvironment(env *app.Environment) *c.Config {
 	return config
 }
 
-// GenerateConfigFromOptions generates a config from the CLI options
+// generates a config from the CLI options
 func GenerateConfigFromOptions(options *GenerateBuildPlanOptions) *c.Config {
 	config := c.EmptyConfig()
 

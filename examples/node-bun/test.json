@@ -1,5 +1,11 @@
 [
   {
-    "expectedOutput": "hello from Bun"
+    "expectedOutput": [
+    	"Node 22.22.0",
+    	"hello from Bun",
+    ],
+    "env": {
+      "NODE_VERSION": "22.22.0"
+    }
   }
 ]

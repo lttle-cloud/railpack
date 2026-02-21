@@ -70,15 +70,16 @@ func NewGenerateContext(app *a.App, env *a.Environment, config *config.Config, l
 		return nil, err
 	}
 
-	dockerignoreCtx := plan.NewDockerignoreContext(app)
-	excludes, includes, err := dockerignoreCtx.ParseWithLogging(logger)
+	dockerignoreCtx, err := plan.NewDockerignoreContext(app)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse .dockerignore: %w", err)
 	}
 
-	if excludes != nil || includes != nil {
-		log.Debugf("Dockerignore exclude patterns: %v", excludes)
-		log.Debugf("Dockerignore include patterns: %v", includes)
+	if dockerignoreCtx.HasFile {
+		logger.LogInfo("Found .dockerignore file, applying filters")
+
+		log.Debugf("Dockerignore exclude patterns: %v", dockerignoreCtx.Excludes)
+		log.Debugf("Dockerignore include patterns: %v", dockerignoreCtx.Includes)
 	}
 
 	ctx := &GenerateContext{
@@ -96,6 +97,10 @@ func NewGenerateContext(app *a.App, env *a.Environment, config *config.Config, l
 	}
 
 	ctx.applyPackagesFromConfig()
+
+	if dockerignoreCtx.HasFile {
+		ctx.Metadata.SetBool("dockerIgnore", true)
+	}
 
 	return ctx, nil
 }
@@ -177,6 +182,7 @@ func (o *BuildStepOptions) NewAptInstallCommand(pkgs []string) plan.Command {
 	pkgs = utils.RemoveDuplicates(pkgs)
 	sort.Strings(pkgs)
 
+	// sh -c is required because && is a shell operator that needs a shell to interpret it
 	return plan.NewExecCommand("sh -c 'apt-get update && apt-get install -y "+strings.Join(pkgs, " ")+"'", plan.ExecOptions{
 		CustomName: "install apt packages: " + strings.Join(pkgs, " "),
 	})
@@ -237,13 +243,24 @@ func (c *GenerateContext) applyConfig() {
 		commandStepBuilder.AddEnvVars(configStep.Variables)
 		maps.Copy(commandStepBuilder.Assets, configStep.Assets)
 
-		// Convert the deploy outputs into layers that will be added to the deploy
+		// Convert the deploy outputs into layers that will be added to the deploy.
+		// Skip if the path is already covered by existing inputs from this step
+		// (e.g. provider already added "." so we don't duplicate it from --build-cmd).
 		outputFilters := []plan.Filter{plan.NewIncludeFilter([]string{"."})}
 		if configStep.DeployOutputs != nil {
 			outputFilters = configStep.DeployOutputs
 		}
 		for _, filter := range outputFilters {
-			c.Deploy.AddInputs([]plan.Layer{plan.NewStepLayer(name, filter)})
+			alreadyCovered := false
+			for _, inc := range filter.Include {
+				if c.Deploy.HasIncludeForStep(name, inc) {
+					alreadyCovered = true
+					break
+				}
+			}
+			if !alreadyCovered {
+				c.Deploy.AddInputs([]plan.Layer{plan.NewStepLayer(name, filter)})
+			}
 		}
 	}
 }
@@ -252,12 +269,11 @@ func (c *GenerateContext) applyConfig() {
 func (c *GenerateContext) NewLocalLayer() plan.Layer {
 	layer := plan.NewLocalLayer()
 
-	excludes, includes, _ := c.dockerignoreCtx.Parse()
-	if len(includes) > 0 {
-		layer.Filter.Include = utils.RemoveDuplicates(append(layer.Filter.Include, includes...))
+	if len(c.dockerignoreCtx.Includes) > 0 {
+		layer.Filter.Include = append(layer.Filter.Include, c.dockerignoreCtx.Includes...)
 	}
-	if len(excludes) > 0 {
-		layer.Filter.Exclude = utils.RemoveDuplicates(append(layer.Filter.Exclude, excludes...))
+	if len(c.dockerignoreCtx.Excludes) > 0 {
+		layer.Filter.Exclude = append(layer.Filter.Exclude, c.dockerignoreCtx.Excludes...)
 	}
 
 	return layer

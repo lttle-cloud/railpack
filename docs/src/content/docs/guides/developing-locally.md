@@ -19,30 +19,29 @@ Install and use all versions of tools needed for Railpack
 mise run setup
 ```
 
-This command will also start a buildkit container (check out `mise.toml` in the root directory for more information).
+This command will also start a BuildKit container (check out `mise.toml` in the root directory for more information).
 
-Use the `cli` task to run the railpack CLI (this is like `railpack --help`)
+Use the `cli` task to run the Railpack CLI (this is like `railpack --help`)
 
 ```bash
 mise run cli --help
 ```
 
-If you want to compile a development build of railpack to use elsewhere on your machine:
+If you want to compile a development build of Railpack to use elsewhere on your machine:
 
 ```bash
 mise run build
 
-# add the railpack repo `bin/` directory to your path to use the newly-compiled railpack on your machine
+# add the Railpack repo `bin/` directory to your path to use the newly-compiled Railpack on your machine
 export PATH="$PWD/bin:$PATH"
 ```
 
-## Building directly with Buildkit
+## Building directly with BuildKit
 
-**👋 Requirement**: an instance of Buildkit must be running locally.
-Instructions in "[Run BuildKit Locally](#run-buildkit-locally)" at the bottom of
-the readme.
+**👋 Requirement**: an instance of BuildKit must be running locally.
+Run `mise run setup` to start a BuildKit container.
 
-Railpack will instantiate a BuildKit client and communicate to over GRPC in
+Railpack will instantiate a BuildKit client and communicate over GRPC in
 order to build the generated LLB.
 
 ```bash
@@ -111,6 +110,10 @@ mise run test-integration
 
 # Run specific test
 mise run test-integration -- -run "TestExamplesIntegration/python-uv-tool-versions"
+
+# Or, from within an examples/ directory, run the test for that example
+cd examples/python-uv-tool-versions
+mise run test-integration-cwd
 ```
 
 The `test.json` file contains an array of test cases. Each case builds and runs the same
@@ -152,9 +155,42 @@ Or with multiple strings:
 }
 ```
 
+### Environment Variables
+
+You can pass environment variables to the container at runtime using the
+`envs` key. This is useful for testing with different configurations, secrets,
+or Railpack configuration variables:
+
+```json
+{
+  "expectedOutput": "Server running on port 3000",
+  "envs": {
+    "DATABASE_URL": "postgresql://user:password@postgres:5432/db",
+    "SECRET_KEY": "test-secret"
+  }
+}
+```
+
+You can also use `RAILPACK_*` configuration variables in `envs` to test
+different build configurations:
+
+```json
+{
+  "expectedOutput": "hello from Node",
+  "envs": {
+    "RAILPACK_PRUNE_DEPS": "true",
+    "RAILPACK_STATIC_FILE_ROOT": "/custom/path"
+  }
+}
+```
+
+See the [environment variables
+documentation](/config/environment-variables) for a complete list of available
+`RAILPACK_*` configuration options.
+
 ### Services
 
-Integation tests can define services (postgres, redis, anything with a docker image) that
+Integration tests can define services (postgres, redis, anything with a docker image) that
 are required for the application to run. Create a `docker-compose.yml` in a test directory
 and it will automatically be picked up and run before the project container is run.
 
@@ -165,11 +201,26 @@ docker compose up -d
 docker run -it --network python-django_default --env DATABASE_URL="postgresql://django_user:django_password@postgres:5432/django_db" python-django
 ```
 
-## Mise commands
+## Mise
+
+Mise is absolutely central to this entire project, so you'll have to dig into the details.
+
+* `mise trust` state is located in `~/.local/state/mise/trusted-configs`
+* There are two mise 'environments' to keep in mind: the host environment, which uses a specific version of mise downloaded
+  just for Railpack, and the mise binary run during the build process. The mise version will be the same, but the environment
+  is different.
+* If `mise tool erlang` reports a `core:` plugin it means this plugin is compiled into the mise binary and its source is available with the mise monorepo. This can be confusing since there are often open source shell-based repos available for a tool as well, but they are unused by default.
+
+### Mise Commands
+
+Some helpful commands for debugging issues with mise:
 
 ```bash
 # Lint and format
 mise run check
+
+# Where is a particular binary?
+mise where pipx:squawk-cli@
 
 # Run tests
 mise run test
@@ -179,6 +230,9 @@ mise run docs-dev
 
 # Inspect what backend is being used for a given tool
 mise tool poetry
+
+# test a tool out without adding it to your environment
+mise exec pipx:httpie -- http google.com
 ```
 
 ## Debugging
@@ -186,7 +240,66 @@ mise tool poetry
 Here's some helpful debugging tricks:
 
 * `URFAVE_CLI_TRACING=on` for debugging CLI argument parsing
-* `mise run cli --verbose build --show-plan --progress plain examples/node-bun`
+* `mise run cli -- --verbose build --show-plan --progress plain examples/node-bun`
 * `mise run build`, add `./bin/` to your `$PATH`, and then run `railpack` in a separate local directory
-* `NO_COLOR=1`
 * `docker exec buildkit buildctl prune` to clean the builder cache
+* `NO_COLOR=1`
+
+### Inspecting LLB Output
+
+The `--dump-llb` flag outputs the raw BuildKit LLB (Low-Level Builder)
+definition, which can be piped to various tools for inspection:
+
+#### Visualize LLB as a graph
+
+```bash
+mise run cli build $(pwd) --dump-llb | \
+  buildctl debug dump-llb --dot | \
+  dot -Tpng > graph.png
+```
+
+#### Inspect LLB as JSON
+
+```bash
+mise run cli build $(pwd) --dump-llb | \
+  buildctl debug dump-llb | \
+  fx
+```
+
+_Note: Any JSON visualization tool can be used (jq, fx, jless, etc.)_
+
+#### Build directly with buildctl
+
+```bash
+mise run cli build $(pwd) --dump-llb | \
+  buildctl build \
+    --progress=plain \
+    --trace=build.log \
+    --local context=.
+```
+
+### Interactive Debugging with Delve
+
+```sh
+mise run debug-cli build $(pwd)
+```
+
+Then, set some breakpoints:
+
+```
+break core/providers/node/node.go:177
+continue
+```
+
+The commands you probably want: `ls`, `print build.Commands`, `continue`, `next`, `locals`,
+
+
+## Maintenance
+
+There are some manual maintenance tasks that need to be done periodically:
+
+* Mise versions need to updated
+* Test snapshots which use `latest` for runtime versions need to be updated periodically.
+* Elixir<>OTP version map needs to be updated as new major versions come out.
+* Pnpm default version needs to be updated as LTS versions are released.
+* Node default version needs to be updated as LTS versions are released.

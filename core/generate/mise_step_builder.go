@@ -16,7 +16,8 @@ import (
 
 const (
 	MisePackageStepName = "packages:mise"
-	MiseInstallCommand  = "sh -c 'mise trust -a && mise install'"
+	// System-level config at /etc/mise/config.toml is auto-trusted by mise
+	MiseInstallCommand = "mise install"
 )
 
 // represents a app-local mise package
@@ -200,10 +201,7 @@ func (b *MiseStepBuilder) GetOutputPaths() []string {
 		return []string{}
 	}
 
-	supportingMiseConfigFiles := b.GetSupportingMiseConfigFiles(b.app.Source)
-	files := []string{"/mise/shims", "/mise/installs", "/usr/local/bin/mise", "/etc/mise/config.toml", "/root/.local/state/mise"}
-	files = append(files, supportingMiseConfigFiles...)
-	return files
+	return []string{"/mise/shims", "/mise/installs", "/usr/local/bin/mise", "/etc/mise/config.toml", "/root/.local/state/mise"}
 }
 
 func (b *MiseStepBuilder) GetLayer() plan.Layer {
@@ -248,6 +246,12 @@ func (b *MiseStepBuilder) Build(p *plan.BuildPlan, options *BuildStepOptions) er
 			// Don't verify the asset because recently released versions don't have a public key to verify against
 			// https://github.com/railwayapp/railpack/issues/207
 			"MISE_NODE_VERIFY": "false",
+			// Enforces HTTPS and stricter security
+			"MISE_PARANOID": "1",
+			// Trust config files in the app directory to avoid trust warnings during build
+			"MISE_TRUSTED_CONFIG_PATHS": "/app",
+			// Enable mise to automatically read idiomatic version files
+			"MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS": mise.IdiomaticVersionFileTools,
 		})
 		maps.Copy(step.Variables, b.Variables)
 
@@ -310,6 +314,7 @@ var miseConfigFiles = []string{
 	".python-version",
 	".node-version",
 	".nvmrc",
+	// .bun-version is a community convention, not officially supported by Bun
 	".bun-version",
 }
 
@@ -317,7 +322,7 @@ func (b *MiseStepBuilder) GetSupportingMiseConfigFiles(path string) []string {
 	files := []string{}
 
 	for _, file := range miseConfigFiles {
-		if b.app.HasMatch(file) {
+		if b.app.HasFile(file) {
 			files = append(files, file)
 		}
 	}

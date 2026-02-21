@@ -31,7 +31,7 @@ func (p *PythonProvider) Initialize(ctx *generate.GenerateContext) error {
 }
 
 func (p *PythonProvider) Detect(ctx *generate.GenerateContext) (bool, error) {
-	hasPython := ctx.App.HasMatch("main.py") ||
+	hasPython := p.getMainPythonFile(ctx) != "" ||
 		p.hasRequirements(ctx) ||
 		p.hasPyproject(ctx) ||
 		p.hasPipfile(ctx)
@@ -107,6 +107,10 @@ func (p *PythonProvider) GetStartCommand(ctx *generate.GenerateContext) string {
 		startCommand = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
 	}
 
+	if p.isFastapi(ctx) && hasMainPythonFile && p.usesDep(ctx, "uvicorn") {
+		startCommand = "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"
+	}
+
 	if p.isFlask(ctx) && hasMainPythonFile && p.usesDep(ctx, "gunicorn") {
 		startCommand = "gunicorn --bind 0.0.0.0:${PORT:-8000} main:app"
 	}
@@ -119,19 +123,22 @@ func (p *PythonProvider) GetStartCommand(ctx *generate.GenerateContext) string {
 }
 
 func (p *PythonProvider) getMainPythonFile(ctx *generate.GenerateContext) string {
-	for _, file := range []string{"main.py", "app.py", "bot.py", "hello.py", "server.py"} {
-		if ctx.App.HasMatch(file) {
+	for _, file := range []string{"main.py", "app.py", "start.py", "bot.py", "hello.py", "server.py"} {
+		if ctx.App.HasFile(file) {
 			return file
 		}
 	}
 	return ""
 }
 
+func (p *PythonProvider) CleansePlan(buildPlan *plan.BuildPlan) {}
+
 func (p *PythonProvider) StartCommandHelp() string {
 	return "To start your Python application, Railpack will automatically:\n\n" +
-		"1. Start FastAPI projects with uvicorn\n" +
-		"2. Start Flask projects with gunicorn\n" +
-		"3. Start Django projects with the gunicorn production server\n\n" +
+		"1. Start FastHTML projects with uvicorn\n" +
+		"2. Start FastAPI projects with uvicorn\n" +
+		"3. Start Flask projects with gunicorn\n" +
+		"4. Start Django projects with the gunicorn production server\n\n" +
 		"Otherwise, it will run the main.py or app.py file in your project root"
 }
 
@@ -177,7 +184,7 @@ func (p *PythonProvider) InstallPipenv(ctx *generate.GenerateContext, install *g
 		plan.NewPathCommand(VENV_PATH + "/bin"),
 	})
 
-	if ctx.App.HasMatch("Pipfile.lock") {
+	if ctx.App.HasFile("Pipfile.lock") {
 		install.AddCommands([]plan.Command{
 			plan.NewCopyCommand("Pipfile"),
 			plan.NewCopyCommand("Pipfile.lock"),
@@ -302,10 +309,6 @@ func (p *PythonProvider) InstallMisePackages(ctx *generate.GenerateContext, mise
 		miseStep.Version(python, envVersion, varName)
 	}
 
-	if versionFile, err := ctx.App.ReadFile(".python-version"); err == nil {
-		miseStep.Version(python, utils.ExtractSemverVersion(string(versionFile)), ".python-version")
-	}
-
 	if runtimeFile, err := ctx.App.ReadFile("runtime.txt"); err == nil {
 		miseStep.Version(python, utils.ExtractSemverVersion(string(runtimeFile)), "runtime.txt")
 	}
@@ -321,6 +324,9 @@ func (p *PythonProvider) InstallMisePackages(ctx *generate.GenerateContext, mise
 	if p.hasPoetry(ctx) || p.hasPdm(ctx) || p.hasPipfile(ctx) {
 		miseStep.Default("pipx", "latest")
 		packages = append(packages, "pipx")
+
+		// prefer to use uv tooling as much as we can
+		miseStep.Variables["MISE_PIPX_UVX"] = "true"
 	}
 
 	if p.hasPoetry(ctx) {
@@ -419,10 +425,18 @@ func (p *PythonProvider) installNeedsAllFiles(ctx *generate.GenerateContext) boo
 	return false
 }
 
+func (p *PythonProvider) usesBinaryPsycopg(ctx *generate.GenerateContext) bool {
+	return p.usesDep(ctx, "psycopg2-binary") || p.usesDep(ctx, "psycopg[binary]")
+}
+
 func (p *PythonProvider) usesPostgres(ctx *generate.GenerateContext) bool {
+	if p.usesBinaryPsycopg(ctx) {
+		return false
+	}
+
 	djangoPythonRe := regexp.MustCompile(`django.db.backends.postgresql`)
 	containsDjangoPostgres := len(ctx.App.FindFilesWithContent("**/*.py", djangoPythonRe)) > 0
-	return p.usesDep(ctx, "psycopg2") || p.usesDep(ctx, "psycopg2-binary") || containsDjangoPostgres
+	return p.usesDep(ctx, "psycopg2") || p.usesDep(ctx, "psycopg") || containsDjangoPostgres
 }
 
 func (p *PythonProvider) usesMysql(ctx *generate.GenerateContext) bool {
@@ -451,9 +465,12 @@ func (p *PythonProvider) addMetadata(ctx *generate.GenerateContext) {
 }
 
 func (p *PythonProvider) usesDep(ctx *generate.GenerateContext, dep string) bool {
-	for _, file := range []string{"requirements.txt", "pyproject.toml", "Pipfile"} {
+	files, err := ctx.App.FindFiles("**/{requirements.txt,pyproject.toml,Pipfile}")
+	if err != nil {
+		return false
+	}
+	for _, file := range files {
 		if contents, err := ctx.App.ReadFile(file); err == nil {
-			// TODO: Do something better than string comparison
 			if strings.Contains(strings.ToLower(contents), strings.ToLower(dep)) {
 				return true
 			}
@@ -483,27 +500,27 @@ func parseVersionFromPipfile(ctx *generate.GenerateContext) (string, string) {
 }
 
 func (p *PythonProvider) hasRequirements(ctx *generate.GenerateContext) bool {
-	return ctx.App.HasMatch("requirements.txt")
+	return ctx.App.HasFile("requirements.txt")
 }
 
 func (p *PythonProvider) hasPyproject(ctx *generate.GenerateContext) bool {
-	return ctx.App.HasMatch("pyproject.toml")
+	return ctx.App.HasFile("pyproject.toml")
 }
 
 func (p *PythonProvider) hasPipfile(ctx *generate.GenerateContext) bool {
-	return ctx.App.HasMatch("Pipfile")
+	return ctx.App.HasFile("Pipfile")
 }
 
 func (p *PythonProvider) hasPoetry(ctx *generate.GenerateContext) bool {
-	return ctx.App.HasMatch("poetry.lock")
+	return ctx.App.HasFile("poetry.lock")
 }
 
 func (p *PythonProvider) hasPdm(ctx *generate.GenerateContext) bool {
-	return ctx.App.HasMatch("pdm.lock")
+	return ctx.App.HasFile("pdm.lock")
 }
 
 func (p *PythonProvider) hasUv(ctx *generate.GenerateContext) bool {
-	return ctx.App.HasMatch("uv.lock")
+	return ctx.App.HasFile("uv.lock")
 }
 
 func (p *PythonProvider) isFasthtml(ctx *generate.GenerateContext) bool {
@@ -514,12 +531,16 @@ func (p *PythonProvider) isFlask(ctx *generate.GenerateContext) bool {
 	return p.usesDep(ctx, "flask")
 }
 
+func (p *PythonProvider) isFastapi(ctx *generate.GenerateContext) bool {
+	return p.usesDep(ctx, "fastapi")
+}
+
 func (p *PythonProvider) getRuntime(ctx *generate.GenerateContext) string {
 	if p.isDjango(ctx) {
 		return "django"
 	} else if p.isFlask(ctx) {
 		return "flask"
-	} else if p.usesDep(ctx, "fastapi") {
+	} else if p.isFastapi(ctx) {
 		return "fastapi"
 	} else if p.isFasthtml(ctx) {
 		return "fasthtml"

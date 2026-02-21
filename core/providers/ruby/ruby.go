@@ -28,7 +28,7 @@ func (p *RubyProvider) Initialize(ctx *generate.GenerateContext) error {
 }
 
 func (p *RubyProvider) Detect(ctx *generate.GenerateContext) (bool, error) {
-	hasRuby := ctx.App.HasMatch("Gemfile")
+	hasRuby := ctx.App.HasFile("Gemfile")
 	return hasRuby, nil
 }
 
@@ -118,26 +118,30 @@ func (p *RubyProvider) GetStartCommand(ctx *generate.GenerateContext) string {
 	startCommand := ""
 	app := ctx.App
 
+	// TODO we auto-run migrations for django, but not for rails, why the difference?
+
 	if p.usesRails(ctx) {
-		if app.HasMatch("rails") {
+		if app.HasFile("rails") {
 			return "bundle exec rails server -b 0.0.0.0 -p ${PORT:-3000}"
 		} else {
-			if !app.HasMatch("bin/rails") {
+			if !app.HasFile("bin/rails") {
 				ctx.Logger.LogWarn("bin/rails not found, run `bundle binstubs railties` to avoid potential startup problems")
 			}
 
 			return "bundle exec bin/rails server -b 0.0.0.0 -p ${PORT:-3000} -e $RAILS_ENV"
 		}
-	} else if app.HasMatch("config/environment.rb") && app.HasMatch("script") {
+	} else if app.HasFile("config/environment.rb") && app.HasMatch("script") {
 		return "bundle exec ruby script/server -p ${PORT:-3000}"
-	} else if app.HasMatch("config.ru") {
+	} else if app.HasFile("config.ru") {
 		return "bundle exec rackup config.ru -p ${PORT:-3000}"
-	} else if app.HasMatch("Rakefile") {
+	} else if app.HasFile("Rakefile") {
 		return "bundle exec rake"
 	}
 
 	return startCommand
 }
+
+func (p *RubyProvider) CleansePlan(buildPlan *plan.BuildPlan) {}
 
 func (p *RubyProvider) StartCommandHelp() string {
 	return "To start your Ruby application, Railpack will automatically:\n\n" +
@@ -245,19 +249,20 @@ func (p *RubyProvider) InstallMisePackages(ctx *generate.GenerateContext, miseSt
 		miseStep.Version(ruby, envVersion, varName)
 	}
 
-	if versionFile, err := ctx.App.ReadFile(".ruby-version"); err == nil {
-		miseStep.Version(ruby, utils.ExtractSemverVersion(string(versionFile)), ".ruby-version")
-	}
-
 	if gemfileVersion := parseVersionFromGemfile(ctx); gemfileVersion != "" {
 		miseStep.Version(ruby, gemfileVersion, "Gemfile")
 	}
 
+	miseStep.UseMiseVersions(ctx, []string{"ruby"})
+
 	miseStep.AddSupportingAptPackage("libyaml-dev")
 	miseStep.AddSupportingAptPackage("libjemalloc-dev")
+	// TODO this does not take into account the mise-specified version of ruby, we should pull the resolved version via Mise
 	version := p.getRubyVersion(ctx)
 	version = utils.ExtractSemverVersion(version)
 	semver, err := utils.ParseSemver(version)
+
+	// TODO we should install these via mise, not apt
 	// YJIT in Ruby 3.1+ requires rustc to install
 	if err == nil && semver != nil && semver.Major >= 3 && semver.Minor > 1 {
 		miseStep.AddSupportingAptPackage("rustc")
