@@ -189,6 +189,16 @@ func (g *BuildGraph) convertNodeToLLB(node *StepNode) (*llb.State, error) {
 		return nil, err
 	}
 
+	// Ensure /tmp is world-writable for exec commands. In rootless BuildKit, /tmp may
+	// have restrictive permissions (mode 755) which prevents tools like apt-key that
+	// drop privileges from creating temporary files.
+	if g.stepHasExecCommands(node.Step) {
+		state = state.Run(
+			llb.Args([]string{"chmod", "1777", "/tmp"}),
+			llb.WithCustomName("[railpack] build step setup"),
+		).Root()
+	}
+
 	// Process the step commands
 	if len(node.Step.Commands) > 0 {
 		for _, cmd := range node.Step.Commands {
@@ -442,6 +452,15 @@ func (g *BuildGraph) addGitHubTokenToMiseInstall(cmd plan.ExecCommand) []llb.Run
 	}
 
 	return []llb.RunOption{llb.AddEnv(githubTokenEnvVar, g.githubToken)}
+}
+
+func (g *BuildGraph) stepHasExecCommands(step *plan.Step) bool {
+	for _, cmd := range step.Commands {
+		if _, ok := cmd.(plan.ExecCommand); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // isMiseInstallCommand checks if the command is a mise install command
