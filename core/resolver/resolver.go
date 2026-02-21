@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	DefaultSource = "railpack default"
+	DefaultSource = "default"
 )
 
 type Resolver struct {

@@ -67,7 +67,26 @@ func Build(ctx context.Context, c client.Client) (*client.Result, error) {
 		return nil, fmt.Errorf("error marshalling plan: %w", err)
 	}
 
-	llbState, image, err := ConvertPlanToLLB(plan, ConvertPlanOptions{
+	inputs, err := c.Inputs(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get inputs")
+	}
+
+	var contextState llb.State
+
+	input, ok := inputs["context"]
+	if ok {
+		contextState = input
+	} else {
+		contextState = llb.Local("context",
+			llb.SharedKeyHint("local"),
+			llb.SessionID(c.BuildOpts().SessionID),
+			llb.WithCustomName("loading ."),
+			llb.FollowPaths([]string{"."}),
+		)
+	}
+
+	llbState, image, err := ConvertPlanToLLB(&contextState, plan, ConvertPlanOptions{
 		BuildPlatform: buildPlatform,
 		SecretsHash:   secretsHash,
 		CacheKey:      cacheKey,
@@ -141,12 +160,23 @@ func validatePlatform(opts map[string]string) (specs.Platform, error) {
 
 // Read a file from the build context
 func readFile(ctx context.Context, c client.Client, filename string) (string, error) {
-	// Create a Local source for the dockerfile
-	src := llb.Local(configMountName,
-		llb.FollowPaths([]string{filename}),
-		llb.SessionID(c.BuildOpts().SessionID),
-		llb.WithCustomName("load build definition from "+filename),
-	)
+	var src llb.State
+
+	inputs, err := c.Inputs(ctx)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to get inputs")
+	}
+
+	input, ok := inputs[configMountName]
+	if ok {
+		src = input
+	} else {
+		src = llb.Local(configMountName,
+			llb.FollowPaths([]string{filename}),
+			llb.SessionID(c.BuildOpts().SessionID),
+			llb.WithCustomName("load build definition from "+filename),
+		)
+	}
 
 	srcDef, err := src.Marshal(ctx)
 	if err != nil {
